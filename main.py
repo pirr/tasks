@@ -7,11 +7,11 @@ import math
 # MAX_TIME_TURN = R_MIN / SPEED  # simplified
 # MAX_AILERON_COEFF = 1  # for simplified -1...1
 MAX_TURN_IN_SEC_DEGREES = 3
-MAX_BANK_IN_SEC_DEGREES = 10
+BANK_IN_SEC_DEGREES = 10
 
 AILERON_VALUE_DEGREES = 0
 
-AILERON_TIME_ON_ONE_DEGREES = 0.2
+AILERON_DEGREES_IN_SEC = 0.2
 
 MAX_BANK_DEGREES = 30  # -30...30
 MAX_AILERON_DEGREES = 30  # -30...30
@@ -40,7 +40,7 @@ async def autopilot_task(new_course: float):
     print(f'change current course from {CURRENT_COURSE} to {new_course}')
     while True:
         asyncio.ensure_future(set_aileron_degrees(new_course))
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
 
 
 def get_course_diff(new_course: float):
@@ -65,29 +65,39 @@ async def set_aileron_degrees(course: float):
         AILERON_TASK.cancel()
     AILERON_TASK = asyncio.current_task()
 
-    if abs(CURRENT_BANK_DEGREES) > MAX_BANK_DEGREES:
-        m = 1 if CURRENT_AILERON_DEGREES > 0 else -1
+    if abs(CURRENT_BANK_DEGREES) >= MAX_BANK_DEGREES:
+        m = -1 if CURRENT_BANK_DEGREES > 0 else 1
         AILERON_VALUE_DEGREES = MAX_AILERON_DEGREES * m
         return
 
     course_diff = get_course_diff(course)
+
     turn_time = calculate_turn_time(
         turning_angle=abs(course_diff),
         speed=SPEED,
         bank_degrees=CURRENT_BANK_DEGREES,
     )
 
-    if course_diff == 0:
+    returning_time_to_zero_aileron_sec = - CURRENT_AILERON_DEGREES * AILERON_DEGREES_IN_SEC
+    n = 1 if returning_time_to_zero_aileron_sec > 0 else -1
+    returning_time_to_zero_bank_sec = sum(AILERON_DEGREES_IN_SEC * i * BANK_IN_SEC_DEGREES / MAX_AILERON_DEGREES
+                                   for i in range(int(abs(returning_time_to_zero_aileron_sec))))
+
+    returning_time_to_zero_bank_sec += AILERON_DEGREES_IN_SEC * \
+                                (returning_time_to_zero_aileron_sec - int(returning_time_to_zero_aileron_sec)) * \
+                                BANK_IN_SEC_DEGREES / MAX_AILERON_DEGREES
+
+    returning_time_to_zero_bank_sec *= n
+
+    if abs(returning_time_to_zero_bank_sec) >= abs(turn_time):
         AILERON_VALUE_DEGREES = 0
         return
 
-    m = 1 if course_diff > 1 else -1
-
-    AILERON_VALUE_DEGREES = turn_time / MAX_TURN_IN_SEC_DEGREES * m
+    m = 1 if course_diff > 0 else -1
+    AILERON_VALUE_DEGREES = (turn_time / MAX_TURN_IN_SEC_DEGREES * m) * MAX_AILERON_DEGREES
     if abs(AILERON_VALUE_DEGREES) > MAX_AILERON_DEGREES:
         AILERON_VALUE_DEGREES = MAX_AILERON_DEGREES * m
-
-    await asyncio.sleep(0)
+        return
 
 
 async def model_aileron():
@@ -98,10 +108,10 @@ async def model_aileron():
         m = 1 if aileron_diff >= 0 else -1
         for i in range(int(abs(aileron_diff))):
             CURRENT_AILERON_DEGREES += m
-            await asyncio.sleep(AILERON_TIME_ON_ONE_DEGREES)
+            await asyncio.sleep(AILERON_DEGREES_IN_SEC)
         aileron_diff = (abs(aileron_diff) - abs(int(aileron_diff))) * m
         CURRENT_AILERON_DEGREES += aileron_diff
-        await asyncio.sleep(abs(aileron_diff) / AILERON_TIME_ON_ONE_DEGREES)
+        await asyncio.sleep(abs(aileron_diff) / AILERON_DEGREES_IN_SEC)
 
 
 async def model_bank():
@@ -114,7 +124,7 @@ async def model_bank():
             continue
         m = 1 if change_on > 0 else -1
         for i in range(abs(int(change_on))):
-            CURRENT_BANK_DEGREES += MAX_BANK_IN_SEC_DEGREES * m
+            CURRENT_BANK_DEGREES += BANK_IN_SEC_DEGREES * m
             await asyncio.sleep(1)
         change_on = (abs(change_on) - abs(int(change_on))) * m
         CURRENT_BANK_DEGREES += change_on
